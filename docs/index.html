@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paper Review Automation</title>
+<style>
+  :root {
+    --bg: #0a0e12;
+    --bg-alt: #0e1319;
+    --card: #121821;
+    --border: #22303d;
+    --text: #e6edf3;
+    --text-dim: #8b98a5;
+    --teal: #2dd4bf;
+    --teal-soft: rgba(45, 212, 191, 0.12);
+    --amber: #f5b940;
+    --red: #f87171;
+    --radius: 16px;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    scroll-behavior: smooth;
+  }
+
+  a { color: var(--teal); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+
+  /* Nav */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(10, 14, 18, 0.85);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 66px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.02rem; }
+  .brand-icon {
+    width: 30px; height: 30px;
+    display: grid; place-items: center;
+    background: var(--teal-soft);
+    border-radius: 8px;
+    font-size: 15px;
+  }
+  .nav-links { display: flex; gap: 24px; font-size: 0.9rem; }
+  .nav-links a { color: var(--text-dim); }
+  .nav-links a:hover { color: var(--text); text-decoration: none; }
+  .nav-cta {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text) !important;
+    font-size: 0.86rem;
+  }
+  .nav-cta:hover { border-color: var(--teal); text-decoration: none; }
+
+  /* Hero */
+  header.hero {
+    padding: 80px 0 56px;
+    text-align: center;
+    background: radial-gradient(circle at 50% 0%, rgba(45,212,191,0.10), transparent 60%);
+  }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: #5eead4;
+    background: var(--teal-soft);
+    padding: 6px 14px;
+    border-radius: 999px;
+    margin-bottom: 22px;
+    letter-spacing: 0.02em;
+  }
+  h1 { font-size: clamp(2rem, 4.2vw, 2.9rem); margin: 0 0 18px; letter-spacing: -0.02em; }
+  .hero p.lede { max-width: 640px; margin: 0 auto 30px; color: var(--text-dim); font-size: 1.05rem; }
+  .hero-actions { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 22px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 0.94rem;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .btn:hover { text-decoration: none; border-color: var(--teal); }
+
+  .stack-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 28px; }
+  .pill {
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    color: var(--text-dim);
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    padding: 5px 12px;
+    border-radius: 999px;
+  }
+
+  /* Sections */
+  section { padding: 64px 0; }
+  section.alt { background: var(--bg-alt); }
+  h2 { font-size: clamp(1.45rem, 2.8vw, 1.8rem); margin: 0 0 12px; letter-spacing: -0.01em; }
+  .section-intro { color: var(--text-dim); max-width: 640px; margin: 0 0 36px; }
+
+  /* Feature grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; }
+  .card .icon {
+    width: 36px; height: 36px;
+    display: grid; place-items: center;
+    background: var(--teal-soft);
+    border-radius: 9px;
+    margin-bottom: 12px;
+    font-size: 17px;
+  }
+  .card h3 { margin: 0 0 8px; font-size: 1rem; }
+  .card p { margin: 0; color: var(--text-dim); font-size: 0.9rem; }
+
+  /* Pipeline flow */
+  .pipeline {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    align-items: stretch;
+  }
+  @media (max-width: 820px) {
+    .pipeline { grid-template-columns: 1fr; }
+    .pipeline .arrow { transform: rotate(90deg); margin: 4px 0; }
+  }
+  .pipeline .stage {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .pipeline .stage .tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: #5eead4;
+    background: var(--teal-soft);
+    padding: 3px 9px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+  }
+  .pipeline .stage h4 { margin: 0 0 6px; font-size: 0.95rem; }
+  .pipeline .stage p { margin: 0; color: var(--text-dim); font-size: 0.84rem; }
+  .pipeline .arrow {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-dim);
+    font-size: 1.3rem;
+    padding: 0 6px;
+  }
+
+  /* Screenshots */
+  .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 22px; }
+  .shot { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .shot .browser-bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 10px 14px;
+    background: #0c1015;
+    border-bottom: 1px solid var(--border);
+  }
+  .shot .browser-bar span { width: 9px; height: 9px; border-radius: 50%; background: #2c3947; }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shot .caption { padding: 14px 16px; font-size: 0.87rem; color: var(--text-dim); }
+  .shot .caption strong { color: var(--text); display: block; margin-bottom: 2px; }
+
+  /* Integrity callout */
+  .callout {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--amber);
+    background: var(--card);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 22px 26px;
+  }
+  .callout.danger { border-left-color: var(--red); }
+  .callout h3 { margin: 0 0 10px; font-size: 1rem; color: var(--amber); display: flex; align-items: center; gap: 8px; }
+  .callout.danger h3 { color: #fca5a5; }
+  .callout ul { margin: 0; padding-left: 20px; color: var(--text-dim); font-size: 0.9rem; }
+  .callout li { margin-bottom: 6px; }
+  .callout p { margin: 0; color: var(--text-dim); font-size: 0.9rem; }
+
+  /* Roles table */
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  th, td { text-align: left; padding: 12px 18px; font-size: 0.88rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-dim); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  tr:last-child td { border-bottom: none; }
+  td.yes { color: #5eead4; }
+  td.no { color: var(--text-dim); }
+
+  code, pre { font-family: var(--mono); font-size: 0.85rem; }
+  code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 5px; }
+  pre {
+    background: #050708;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    color: #d6dbe6;
+  }
+  pre code { background: none; padding: 0; }
+
+  .run-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 720px) {
+    .run-grid { grid-template-columns: 1fr; }
+    .nav-links { display: none; }
+  }
+  .run-card h3 {
+    margin: 0 0 12px;
+    font-size: 0.92rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+
+  footer {
+    padding: 40px 0;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    border-top: 1px solid var(--border);
+  }
+  footer a { color: var(--text-dim); }
+  footer a:hover { color: var(--teal); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand">
+      <span class="brand-icon">📄</span>
+      Paper Review Automation
+    </div>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#integrity">Integrity</a>
+      <a href="#run-it">Setup</a>
+    </div>
+    <a class="nav-cta" href="https://github.com/Manojid/Research-paper-review-revise-automation" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">🪟 Windows · Codex CLI + Claude Code CLI · No API keys</span>
+    <h1>Drop a paper in a folder.<br>Wake up to a reviewed, revised draft.</h1>
+    <p class="lede">
+      Every morning at 09:00, this pipeline walks every employee's client folders,
+      sends each eligible paper through a Q1-standard review and a scientific revision —
+      driven entirely by the Codex and Claude Code CLIs on your own subscriptions,
+      never an API key. Nobody opens a chat window. It reads and writes files on disk.
+    </p>
+    <div class="hero-actions">
+      <a class="btn" href="https://github.com/Manojid/Research-paper-review-revise-automation" target="_blank" rel="noopener">View source on GitHub</a>
+      <a class="btn" href="#run-it">Setup guide</a>
+    </div>
+    <div class="stack-row">
+      <span class="pill">Python</span>
+      <span class="pill">Flask control panel</span>
+      <span class="pill">SQLite audit trail</span>
+      <span class="pill">Windows Task Scheduler</span>
+      <span class="pill">PyInstaller + Inno Setup</span>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2>What it does</h2>
+    <p class="section-intro">A scheduled, file-driven pipeline built around one hard rule: it never deletes, moves, or renames a client's files.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="icon">🕘</div>
+        <h3>Fully scheduled</h3>
+        <p>Fires daily via Windows Task Scheduler. Walks every employee and client folder, decides what's eligible, and processes it — no manual trigger needed.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🔒</div>
+        <h3>Zero delete/rename/move</h3>
+        <p>Enforced by an AST-checked test, not just a convention — <code>tests/test_safety.py</code> fails the build if that invariant is ever broken.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🧪</div>
+        <h3>Scientific integrity checks</h3>
+        <p>Every revision is diffed against the original and flagged for changed metrics, invented numbers, leftover placeholders, or suspicious truncation.</p>
+      </div>
+      <div class="card">
+        <div class="icon">👥</div>
+        <h3>Role-based LAN dashboard</h3>
+        <p>Admins see every employee's papers and settings; Users see only their own — enforced server-side, not just hidden in the UI.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📜</div>
+        <h3>Full audit trail</h3>
+        <p>Every paper's timestamp, phase, model, outcome, and any error is recorded in SQLite and queryable directly.</p>
+      </div>
+      <div class="card">
+        <div class="icon">♻️</div>
+        <h3>Idempotent &amp; crash-safe</h3>
+        <p>Eligibility is recomputed from disk every run. A crash halfway through just picks back up — it can't double-process a paper.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🖥️</div>
+        <h3>Tray app + desktop icon</h3>
+        <p>A system tray icon and one-click desktop shortcut keep the dashboard always reachable, without a console window.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📦</div>
+        <h3>Portable installer</h3>
+        <p>A PyInstaller + Inno Setup build packages five executables under one per-user installer — no Python environment required on the target machine.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="pipeline">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="section-intro">Two phases, both driven by CLI subprocesses reaching your Codex and Claude Code subscriptions — never a direct API call.</p>
+    <div class="pipeline">
+      <div class="stage">
+        <span class="tag">09:00 daily</span>
+        <h4>Scan</h4>
+        <p>Walk every employee → client folder for the current month, apply the file-count rules to decide what's eligible.</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage">
+        <span class="tag">Review · Codex</span>
+        <h4>paper.docx → review</h4>
+        <p>Converted to markdown, reviewed to a Q1 standard by the Codex CLI, written back as <code>&lt;Client&gt;_review.docx</code>.</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage">
+        <span class="tag">Revise · Claude</span>
+        <h4>paper + review → revision</h4>
+        <p>Re-scanned from disk, then paper and review are sent to Claude Code, producing <code>Correct_&lt;Client&gt;_paper.docx</code>.</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage">
+        <span class="tag">Validate</span>
+        <h4>Check &amp; log</h4>
+        <p>The revision is validated against the original; anything suspicious is flagged <code>REQUIRES_HUMAN_REVIEW</code>, never silently accepted.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="screenshots">
+  <div class="wrap">
+    <h2>Screenshots</h2>
+    <p class="section-intro">The LAN-only control panel — reachable only from your office network, never the public internet.</p>
+    <div class="shots">
+      <div class="shot">
+        <div class="browser-bar"><span></span><span></span><span></span></div>
+        <img src="assets/login.png" alt="Sign-in screen" loading="lazy">
+        <div class="caption"><strong>Sign in</strong>Account requests need admin approval before first login.</div>
+      </div>
+      <div class="shot">
+        <div class="browser-bar"><span></span><span></span><span></span></div>
+        <img src="assets/dashboard.png" alt="Dashboard overview" loading="lazy">
+        <div class="caption"><strong>Dashboard</strong>This month's papers by status, with a one-click Start.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="integrity">
+  <div class="wrap">
+    <h2>Built around not trusting the model blindly</h2>
+    <p class="section-intro">Both prompts forbid inventing results, datasets, citations, or statistics — and the pipeline checks that, rather than taking the model's word for it.</p>
+
+    <div class="callout danger">
+      <h3>🚫 A revision fails validation when it:</h3>
+      <ul>
+        <li>Reports a metric whose value changed from the original — the signature failure this guards against (an inflated accuracy, say)</li>
+        <li>Introduces a metric that wasn't in the original at all</li>
+        <li>Leaves placeholder text behind — <code>[TODO]</code>, <code>[INSERT RESULT]</code>, <code>[ADD CITATION]</code></li>
+        <li>Comes back less than half the length of the original — likely truncated</li>
+      </ul>
+    </div>
+
+    <div style="height: 16px;"></div>
+
+    <div class="callout">
+      <h3>⚠️ Warned, not failed</h3>
+      <p>A disappearing dataset or model name, or a missing expected section, is flagged but doesn't block the file — every flagged paper is recorded <code>REQUIRES_HUMAN_REVIEW</code>, and the file is still written so a human can inspect it directly.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Roles</h2>
+    <p class="section-intro">Every restriction is enforced on the server — hiding a button is cosmetic, calling the API directly as a User is refused with a 403.</p>
+    <table>
+      <tr><th></th><th>Admin</th><th>User</th></tr>
+      <tr><td>See papers</td><td class="yes">Every employee</td><td class="no">Own employee only</td></tr>
+      <tr><td>Start a run, change settings/schedule/prompts</td><td class="yes">Yes</td><td class="no">No</td></tr>
+      <tr><td>Approve/reject sign-up requests</td><td class="yes">Yes</td><td class="no">No</td></tr>
+      <tr><td>Open a file on the server</td><td class="yes">Any paper</td><td class="no">Own only</td></tr>
+    </table>
+  </div>
+</section>
+
+<section class="alt" id="run-it">
+  <div class="wrap">
+    <h2>Setup</h2>
+    <p class="section-intro">Both models are reached through the Codex and Claude Code CLI binaries, authenticated with your existing subscriptions — no API keys anywhere.</p>
+    <div class="run-grid">
+      <div class="run-card">
+        <h3>Install &amp; configure</h3>
+        <pre><code>py -m pip install -r requirements.txt
+copy config.example.toml config.toml
+# set research_papers_root in config.toml
+
+codex login
+claude</code></pre>
+      </div>
+      <div class="run-card">
+        <h3>Try it safely</h3>
+        <pre><code>py run.py --dry-run      # reports decisions, changes nothing
+py run.py --test-mode    # mock model, checks file naming
+py run.py --provider real   # one real paper
+
+powershell -File scripts\register_task.ps1  # schedule it</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Paper Review Automation &middot; Built by Manoj &middot; <a href="https://github.com/Manojid/Research-paper-review-revise-automation" target="_blank" rel="noopener">Source on GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>
