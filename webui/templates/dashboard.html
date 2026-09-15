@@ -27,6 +27,42 @@
   </div>
 {% endif %}
 
+{% if models.api_mode and not (models.key_status.anthropic and models.key_status.openai) %}
+  <div class="banner bad">
+    <div class="b-in">
+      {{ i.icon('alert', 20) }}
+      <div>
+        <strong>API mode is on, but a key is missing</strong>
+        <span>Add your Anthropic/OpenAI API key before running.</span>
+      </div>
+    </div>
+    {% if user.can_control_runs %}
+      <a class="btn small" href="{{ url_for('settings') }}#models">Add it in Settings</a>
+    {% endif %}
+  </div>
+{% elif not models.api_mode and (models.signed_in.codex is sameas false or models.signed_in.claude is sameas false) %}
+  <div class="banner bad">
+    <div class="b-in">
+      {{ i.icon('alert', 20) }}
+      <div>
+        <strong>Sign in required</strong>
+        <span>
+          {% if models.signed_in.codex is sameas false and models.signed_in.claude is sameas false %}
+            Codex and Claude are both signed out.
+          {% elif models.signed_in.codex is sameas false %}
+            Codex is signed out.
+          {% else %}
+            Claude is signed out.
+          {% endif %}
+        </span>
+      </div>
+    </div>
+    {% if user.can_control_runs %}
+      <a class="btn small" href="{{ url_for('settings') }}#models">Sign in from Settings</a>
+    {% endif %}
+  </div>
+{% endif %}
+
 <section class="panel hero">
   <div class="panel-head">
     <div>

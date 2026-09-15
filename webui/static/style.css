@@ -273,6 +273,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 .empty { color: var(--muted); }
 .muted { color: var(--muted); }
 .inline { display: inline-flex; gap: 8px; }
+.field-with-browse { display: flex; gap: 8px; }
+.field-with-browse input { flex: 1; min-width: 0; }
 
 /* ================================================================ run view */
 
@@ -431,6 +433,24 @@ button.filelink:hover { border-color: var(--accent); background: var(--accent-so
 .filelink .fileword { font-size: 11px; color: var(--muted); font-weight: 620; letter-spacing: .01em; }
 .filelink .filename { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ========================================================== folder browser */
+dialog#folder-browser {
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
+  padding: 22px 24px; width: min(520px, 90vw);
+}
+dialog#folder-browser::backdrop { background: rgba(0, 0, 0, .5); }
+dialog#folder-browser h2 { font-size: 18px; margin-bottom: 4px; }
+#folder-browser-current {
+  font-size: 12.5px; color: var(--muted); word-break: break-all;
+  margin-bottom: 14px; padding: 8px 10px; background: var(--panel-soft);
+  border-radius: var(--r-sm); border: 1px solid var(--line);
+}
+#folder-browser-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+#folder-browser-list .filelink.up { color: var(--muted); }
+#folder-browser-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+#folder-browser-empty { font-size: 12.5px; color: var(--faint); padding: 8px 2px; }
+
 /* ============================================================= model cards */
 
 .models { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
@@ -456,6 +476,7 @@ button.filelink:hover { border-color: var(--accent); background: var(--accent-so
 .tag.pin { color: var(--revise); background: var(--revise-soft); border-color: color-mix(in srgb, var(--revise) 25%, transparent); }
 .tag.auto { color: var(--idle); background: var(--idle-soft); border-color: var(--line); }
 .bad-text { color: var(--bad); }
+.good-text { color: var(--done); }
 
 /* ================================================================ settings */
 

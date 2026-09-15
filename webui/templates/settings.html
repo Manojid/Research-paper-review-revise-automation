@@ -13,11 +13,47 @@
   {% if message %}<div class="note ok">{{ i.icon('check', 17) }}<span>{{ message }}</span></div>{% endif %}
   {% if error %}<div class="note err">{{ i.icon('alert', 17) }}<span>{{ error }}</span></div>{% endif %}
 
+  {% if models.api_mode and not (models.key_status.anthropic and models.key_status.openai) %}
+    <div class="banner bad">
+      <div class="b-in">
+        {{ i.icon('alert', 20) }}
+        <div>
+          <strong>API mode is on, but a key is missing</strong>
+          <span>Add your Anthropic/OpenAI API key below before running.</span>
+        </div>
+      </div>
+      <a class="btn small" href="#models">Jump to Models</a>
+    </div>
+  {% elif not models.api_mode and (models.signed_in.codex is sameas false or models.signed_in.claude is sameas false) %}
+    <div class="banner bad">
+      <div class="b-in">
+        {{ i.icon('alert', 20) }}
+        <div>
+          <strong>Sign in required</strong>
+          <span>
+            {% if models.signed_in.codex is sameas false and models.signed_in.claude is sameas false %}
+              Codex and Claude are both signed out.
+            {% elif models.signed_in.codex is sameas false %}
+              Codex is signed out.
+            {% else %}
+              Claude is signed out.
+            {% endif %}
+            Use the Sign in button below.
+          </span>
+        </div>
+      </div>
+      <a class="btn small" href="#models">Jump to Models</a>
+    </div>
+  {% endif %}
+
   <form method="post">
     <div class="form-row">
       <label for="research_papers_root">Papers folder</label>
-      <input type="text" id="research_papers_root" name="research_papers_root"
-             value="{{ values.research_papers_root }}">
+      <div class="field-with-browse">
+        <input type="text" id="research_papers_root" name="research_papers_root"
+               value="{{ values.research_papers_root }}">
+        <button type="button" class="btn" data-browse-for="research_papers_root">Browse…</button>
+      </div>
       <span class="help">The folder that <strong>contains</strong> your month folders — the parent of "August 2026", not the month itself.</span>
     </div>
 
@@ -34,50 +70,117 @@
       <span class="help">Grammar mode is for building and testing: it uses a fraction of the tokens and never touches your numbers or methodology. Switch to full review when you are ready to use this for real work.</span>
     </div>
 
+    <div class="form-row">
+      <label for="provider_mode">Model access</label>
+      <select id="provider_mode" name="provider_mode" data-provider-toggle>
+        <option value="real" {{ 'selected' if values.provider_mode != 'api' }}>
+          CLI — Codex/Claude subscription login (default)
+        </option>
+        <option value="api" {{ 'selected' if values.provider_mode == 'api' }}>
+          API — billed per token, needs API keys
+        </option>
+      </select>
+      <span class="help">
+        CLI uses the Codex/Claude apps you're already logged into — no extra cost beyond the
+        subscription. API calls Anthropic/OpenAI directly and is billed separately, per token; it
+        does not need a desktop login, so it can run unattended on a machine nobody is signed into.
+      </span>
+    </div>
+
     <h2 id="models" class="section-label">Models</h2>
 
-    {% for m in models.stages %}
+    <div id="cli-models" hidden>
+      {% for m in models.stages %}
+        <div class="form-row">
+          <label for="model_{{ m.provider }}">{{ m.stage }} stage — {{ m.role }}</label>
+          <select id="model_{{ m.provider }}" name="model_{{ m.provider }}"
+                  data-other="model_{{ m.provider }}_other">
+            {% for opt in m.options %}
+              <option value="{{ opt.id }}" {{ 'selected' if opt.id == m.configured }}>
+                {{ opt.label }}{% if opt.note %} — {{ opt.note }}{% endif %}
+              </option>
+            {% endfor %}
+            <option value="__other__">Other — type a model name…</option>
+          </select>
+          <input type="text" id="model_{{ m.provider }}_other" name="model_{{ m.provider }}_other"
+                 placeholder="e.g. a model announced after this was set up" hidden>
+          <span class="help">
+            {% if m.available %}
+              {{ m.role }} CLI {{ m.version }}.
+            {% else %}
+              <strong class="bad-text">Not detected.</strong>
+            {% endif %}
+            Currently uses <code>{{ m.effective }}</code>.
+            {% if m.last_used %}Last run used <code>{{ m.last_used }}</code>.{% endif %}
+            {% set is_signed_in = models.signed_in.get(m.provider) %}
+            {% if is_signed_in is sameas true %}
+              <strong class="good-text">Signed in.</strong>
+            {% elif is_signed_in is sameas false %}
+              <strong class="bad-text">Signed out.</strong>
+            {% endif %}
+          </span>
+          <button type="button" class="btn small" data-cli-login="{{ m.provider }}">Sign in</button>
+          <span class="help cli-login-status" data-cli-login-status="{{ m.provider }}"></span>
+        </div>
+      {% endfor %}
+
+      <p class="hint">
+        <strong>Sign in</strong> opens a real console window running the CLI's own sign-in flow
+        (a browser hop for Codex, or Claude's own first-run prompt) — complete it there, then
+        you can close the window.
+      </p>
+
+      <p class="hint">
+        Aliases such as <code>opus</code> and <code>sonnet</code> always point at the newest model in
+        that family, so choosing one means this list never goes out of date. Pinned names such as
+        <code>claude-opus-5</code> stay on that exact version. Models seen in a recent session are
+        added automatically, and anything you type into <em>Other</em> is remembered for next time.
+      </p>
+      <p class="hint">
+        The Codex CLI does not publish a list of its models, so only the app default is offered until
+        one is detected or you enter it. To add models permanently, edit <code>{{ registry_path }}</code>.
+      </p>
+    </div>
+
+    <div id="api-models" hidden>
       <div class="form-row">
-        <label for="model_{{ m.provider }}">{{ m.stage }} stage — {{ m.role }}</label>
-        <select id="model_{{ m.provider }}" name="model_{{ m.provider }}"
-                data-other="model_{{ m.provider }}_other">
-          {% for opt in m.options %}
-            <option value="{{ opt.id }}" {{ 'selected' if opt.id == m.configured }}>
-              {{ opt.label }}{% if opt.note %} — {{ opt.note }}{% endif %}
-            </option>
-          {% endfor %}
-          <option value="__other__">Other — type a model name…</option>
-        </select>
-        <input type="text" id="model_{{ m.provider }}_other" name="model_{{ m.provider }}_other"
-               placeholder="e.g. a model announced after this was set up" hidden>
+        <label for="anthropic_api_key">Anthropic API key — review stage</label>
+        <input type="password" id="anthropic_api_key" name="anthropic_api_key"
+               placeholder="{{ 'Configured — leave blank to keep it' if models.key_status.anthropic else 'Not set' }}"
+               autocomplete="off">
         <span class="help">
-          {% if m.available %}
-            {{ m.role }} CLI {{ m.version }}.
-          {% else %}
-            <strong class="bad-text">Not detected.</strong>
-          {% endif %}
-          Currently uses <code>{{ m.effective }}</code>.
-          {% if m.last_used %}Last run used <code>{{ m.last_used }}</code>.{% endif %}
+          {{ 'A key is stored.' if models.key_status.anthropic else 'No key stored yet.' }}
+          Stored in Windows Credential Manager, never written to the config file or shown again once saved.
         </span>
       </div>
-    {% endfor %}
-
-    <p class="hint">
-      Aliases such as <code>opus</code> and <code>sonnet</code> always point at the newest model in
-      that family, so choosing one means this list never goes out of date. Pinned names such as
-      <code>claude-opus-5</code> stay on that exact version. Models seen in a recent session are
-      added automatically, and anything you type into <em>Other</em> is remembered for next time.
-    </p>
-    <p class="hint">
-      The Codex CLI does not publish a list of its models, so only the app default is offered until
-      one is detected or you enter it. To add models permanently, edit <code>{{ registry_path }}</code>.
-    </p>
+      <div class="form-row">
+        <label for="openai_api_key">OpenAI API key — revision stage</label>
+        <input type="password" id="openai_api_key" name="openai_api_key"
+               placeholder="{{ 'Configured — leave blank to keep it' if models.key_status.openai else 'Not set' }}"
+               autocomplete="off">
+        <span class="help">
+          {{ 'A key is stored.' if models.key_status.openai else 'No key stored yet.' }}
+          Stored in Windows Credential Manager, never written to the config file or shown again once saved.
+        </span>
+      </div>
+      <p class="hint">
+        API access is billed separately from any Codex/Claude subscription — a real, per-token cost.
+        Use a scoped, low-limit key where your provider supports it.
+      </p>
+    </div>
 
     <h2 class="section-label">Folders and behaviour</h2>
 
     <div class="form-row">
       <label for="timezone">Timezone</label>
-      <input type="text" id="timezone" name="timezone" value="{{ values.timezone }}">
+      <select id="timezone" name="timezone">
+        {% if values.timezone not in timezones %}
+          <option value="{{ values.timezone }}" selected>{{ values.timezone }} (not a recognised zone)</option>
+        {% endif %}
+        {% for tz in timezones %}
+          <option value="{{ tz }}" {{ 'selected' if tz == values.timezone }}>{{ tz }}</option>
+        {% endfor %}
+      </select>
       <span class="help">Decides which month counts as current, independent of the machine clock.</span>
     </div>
 
@@ -90,7 +193,10 @@
 
     <div class="form-row">
       <label for="scratch_dir">Working folder</label>
-      <input type="text" id="scratch_dir" name="scratch_dir" value="{{ values.scratch_dir }}">
+      <div class="field-with-browse">
+        <input type="text" id="scratch_dir" name="scratch_dir" value="{{ values.scratch_dir }}">
+        <button type="button" class="btn" data-browse-for="scratch_dir">Browse…</button>
+      </div>
       <span class="help">Where papers are staged for the models. Leave as-is unless you have a reason — it must not sit under AppData, which the Codex sandbox refuses to write to.</span>
     </div>
 
@@ -128,9 +234,21 @@
   <p class="hint">
     Notification credentials and the Codex/Claude binary paths are deliberately left out of this form.
     Secrets belong in environment variables or the config file directly, not behind a browser form on a
-    machine that anyone walking past could use.
+    machine that anyone walking past could use. The Anthropic/OpenAI API keys above are a deliberate,
+    narrow exception — they're written straight to Windows Credential Manager, never to the config file
+    or a log, and the field never shows a saved value back.
   </p>
 </section>
+
+<dialog id="folder-browser">
+  <h2>Choose a folder</h2>
+  <p id="folder-browser-current"></p>
+  <div id="folder-browser-list"></div>
+  <div id="folder-browser-actions">
+    <button type="button" class="btn" id="folder-browser-cancel">Cancel</button>
+    <button type="button" class="btn primary" id="folder-browser-select">Select this folder</button>
+  </div>
+</dialog>
 
 {% endblock %}
 
@@ -143,5 +261,117 @@
     sel.addEventListener('change', sync);
     box.hidden = sel.value !== '__other__';
   });
+
+  /* Show the CLI model pickers or the API key fields, never both. */
+  const providerSelect = document.querySelector('select[data-provider-toggle]');
+  const cliBlock = document.getElementById('cli-models');
+  const apiBlock = document.getElementById('api-models');
+  const syncProviderBlocks = () => {
+    const isApi = providerSelect.value === 'api';
+    cliBlock.hidden = isApi;
+    apiBlock.hidden = !isApi;
+  };
+  providerSelect.addEventListener('change', syncProviderBlocks);
+  syncProviderBlocks();
+
+  /* "Sign in" opens a real console window (see /api/cli-login/<provider>);
+     the button only reports whether the window opened, never whether the
+     sign-in itself succeeded — that happens in the console, out of view. */
+  document.querySelectorAll('[data-cli-login]').forEach(btn => {
+    const provider = btn.dataset.cliLogin;
+    const status = document.querySelector(`[data-cli-login-status="${provider}"]`);
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      if (status) status.textContent = 'Opening…';
+      try {
+        const res = await fetch(`/api/cli-login/${provider}`, { method: 'POST' });
+        const data = await res.json();
+        if (status) status.textContent = data.message || '';
+      } catch (err) {
+        if (status) status.textContent = 'Could not reach the server.';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  /* "Browse…" — a server-side folder listing stands in for a native OS
+     folder picker, which a browser page has no way to open (see
+     service.browse_folders()). Navigates by re-fetching; "Select this
+     folder" writes the current path back into whichever text field opened
+     it, nothing else. */
+  (() => {
+    const dialog = document.getElementById('folder-browser');
+    const currentEl = document.getElementById('folder-browser-current');
+    const listEl = document.getElementById('folder-browser-list');
+    const selectBtn = document.getElementById('folder-browser-select');
+    const cancelBtn = document.getElementById('folder-browser-cancel');
+    const folderIcon = '<svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+      'stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+
+    let targetInput = null;
+    let currentPath = '';
+
+    async function load(path) {
+      currentEl.textContent = 'Loading…';
+      listEl.innerHTML = '';
+      let data;
+      try {
+        const res = await fetch(`/api/browse-folders?path=${encodeURIComponent(path)}`);
+        data = await res.json();
+      } catch (err) {
+        currentEl.textContent = 'Could not reach the server.';
+        return;
+      }
+      if (!data.ok) {
+        currentEl.textContent = data.message || 'Could not open that folder.';
+        return;
+      }
+      currentPath = data.path;
+      currentEl.textContent = data.path;
+      listEl.innerHTML = '';
+
+      if (data.parent) {
+        const up = document.createElement('button');
+        up.type = 'button';
+        up.className = 'filelink up';
+        up.innerHTML = `${folderIcon}<span class="txt"><span class="filename">.. (up)</span></span>`;
+        up.addEventListener('click', () => load(data.parent));
+        listEl.appendChild(up);
+      }
+
+      if (data.folders.length === 0) {
+        const empty = document.createElement('p');
+        empty.id = 'folder-browser-empty';
+        empty.textContent = 'No subfolders here.';
+        listEl.appendChild(empty);
+      }
+
+      data.folders.forEach(folder => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'filelink';
+        row.innerHTML = `${folderIcon}<span class="txt"><span class="filename">${folder.name}</span></span>`;
+        row.addEventListener('click', () => load(folder.path));
+        listEl.appendChild(row);
+      });
+    }
+
+    document.querySelectorAll('[data-browse-for]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        targetInput = document.getElementById(btn.dataset.browseFor);
+        dialog.showModal();
+        load(targetInput.value || '');
+      });
+    });
+
+    selectBtn.addEventListener('click', () => {
+      if (targetInput) targetInput.value = currentPath;
+      dialog.close();
+    });
+    cancelBtn.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+  })();
 </script>
 {% endblock %}

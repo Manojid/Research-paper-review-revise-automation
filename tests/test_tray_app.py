@@ -152,6 +152,50 @@ def test_start_does_not_spawn_when_the_port_is_already_taken(monkeypatch, tmp_pa
     assert calls == []
 
 
+# --- _acquire_app_mutex() -----------------------------------------------------
+
+
+def test_acquire_app_mutex_calls_create_mutex_with_the_expected_name(monkeypatch):
+    calls = []
+
+    class FakeKernel32:
+        def CreateMutexW(self, security_attrs, initial_owner, name):
+            calls.append((security_attrs, initial_owner, name))
+            return 12345  # a fake handle
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    monkeypatch.setattr(tray_app.sys, "platform", "win32")
+    import ctypes
+    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+
+    handle = tray_app._acquire_app_mutex()
+
+    assert handle == 12345
+    assert calls == [(None, False, tray_app._APP_MUTEX_NAME)]
+
+
+def test_acquire_app_mutex_returns_none_on_non_windows(monkeypatch):
+    monkeypatch.setattr(tray_app.sys, "platform", "linux")
+    assert tray_app._acquire_app_mutex() is None
+
+
+def test_acquire_app_mutex_never_raises_on_failure(monkeypatch):
+    class FakeKernel32:
+        def CreateMutexW(self, *a):
+            raise OSError("no can do")
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    monkeypatch.setattr(tray_app.sys, "platform", "win32")
+    import ctypes
+    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+
+    assert tray_app._acquire_app_mutex() is None
+
+
 # --- open_or_start() ---------------------------------------------------------
 
 

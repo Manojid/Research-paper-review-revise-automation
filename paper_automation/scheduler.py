@@ -1,7 +1,9 @@
 """In-app processing window and periodic scan loop (spec sections 11-12, 41).
 
-Windows Task Scheduler (scripts/register_task.ps1) remains the single source of
-*when this process starts* — its daily trigger is unchanged. What this module adds
+Windows Task Scheduler (registered via scripts/register_task.ps1 for a manual
+source-run setup, the web UI's Settings toggle, or installer.iss at install time —
+see service.py's set_schedule()) remains the single source of *when this process
+starts* — its daily trigger is unchanged. What this module adds
 is that, under `py run.py --loop`, the process stays resident for the configured
 window instead of exiting after one scan, so a paper dropped mid-morning is picked
 up without waiting for tomorrow's trigger. A one-shot `py run.py` (no --loop)

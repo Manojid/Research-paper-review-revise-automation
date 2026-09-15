@@ -10,8 +10,10 @@ system to open a file — is reported through `supports_open_file` rather than
 assumed, so a front end can hide the button when it does not apply.
 """
 
+import json
 import logging
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -20,12 +22,12 @@ from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, available_timezones
 
 from . import config as config_module
-from . import model_registry, phases, scanner, usage
+from . import model_registry, phases, scanner, secrets_store, usage
 from .config import Config
-from .models import Decision, Phase, ProcessingState
+from .models import Decision, FailureKind, Phase, ProcessingState, ProviderError
 from .state import StateStore
 from .storage import LocalStorage
 from .storage.base import StorageBackend
@@ -37,6 +39,10 @@ log = logging.getLogger(__name__)
 # app. Without this flag, Windows briefly opens and closes a visible console
 # for each call — this suppresses that, without changing what's captured.
 _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+# The one deliberate exception to "no visible console" in this module:
+# open_cli_login() below needs the user to actually see and interact with
+# codex/claude's own sign-in flow (browser OAuth or terminal prompts).
+_CREATE_NEW_CONSOLE = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
 
 SCHEDULED_TASK_NAME = "ResearchPaperAutomation"
 MAX_LOG_LINES = 4000
@@ -407,6 +413,7 @@ EDITABLE = {
     "research_papers_root": "path",
     "timezone": "str",
     "task_mode": "str",
+    "provider_mode": "str",
     "supported_extensions": "list",
     "create_missing_month": "bool",
     "scratch_dir": "path",
@@ -453,22 +460,26 @@ def update_config_file(path: Path, updates: dict) -> list[str]:
             continue
         rendered = f"{key} = {_format_toml_value(raw, kind)}"
         pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
-        for i, line in enumerate(lines):
-            # Stop at the first table header: these keys all live at top level, and
-            # a same-named key under [providers.codex] must not be clobbered.
-            if line.lstrip().startswith("["):
-                break
-            if pattern.match(line):
+
+        # These keys all live at top level, before the first [table] header —
+        # search (and insert, if absent) only in that region, so a same-named
+        # key under e.g. [providers.codex] is never touched. Recomputed fresh
+        # each iteration since an earlier insertion in this same call shifts
+        # later line indices.
+        first_table = next(
+            (i for i, line in enumerate(lines) if line.lstrip().startswith("[")),
+            len(lines),
+        )
+        found = False
+        for i in range(first_table):
+            if pattern.match(lines[i]):
                 if lines[i] != rendered:
                     lines[i] = rendered
                     applied.append(key)
+                found = True
                 break
-        else:
-            insert_at = next(
-                (i for i, line in enumerate(lines) if line.lstrip().startswith("[")),
-                len(lines),
-            )
-            lines.insert(insert_at, rendered)
+        if not found:
+            lines.insert(first_table, rendered)
             applied.append(key)
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -480,12 +491,29 @@ def config_values(cfg: Config) -> dict:
         "research_papers_root": str(cfg.research_papers_root),
         "timezone": cfg.timezone,
         "task_mode": cfg.task_mode,
+        # "auto"/"mock" aren't exposed as their own dropdown option (see
+        # settings.html) — anything other than "api" reads as "CLI" there.
+        "provider_mode": cfg.provider_mode,
         "supported_extensions": ", ".join(cfg.supported_extensions),
         "create_missing_month": cfg.create_missing_month,
         "scratch_dir": str(cfg.scratch_dir),
         "max_retries": cfg.max_retries,
         "retry_base_delay": cfg.retry_base_delay,
     }
+
+
+# Cached: available_timezones() re-scans tzdata's zoneinfo directory on every
+# call, which isn't free, and the set of IANA zones never changes at runtime.
+_timezone_choices: list[str] | None = None
+
+
+def timezone_choices() -> list[str]:
+    """Every real IANA zone name, sorted — for the Settings page's Timezone
+    dropdown (same list installer/first_run_wizard.py's Combobox uses)."""
+    global _timezone_choices
+    if _timezone_choices is None:
+        _timezone_choices = sorted(available_timezones())
+    return _timezone_choices
 
 
 # ------------------------------------------------------------------- model info
@@ -522,13 +550,92 @@ def clear_version_cache() -> None:
     _version_cache.clear()
 
 
+# Same cost/caching rationale as cli_version() above — a real subprocess
+# spawn, must not fire on every dashboard/settings page load.
+_SIGNIN_TTL = 600.0
+_signin_cache: dict[str, tuple[float, bool | None]] = {}
+
+_SIGNED_OUT_PHRASES = ("not logged in", "not signed in", "logged out", "no credentials")
+
+
+def cli_signed_in(provider_name: str, provider_cfg, force: bool = False) -> bool | None:
+    """Whether the CLI reports an active login session, right now.
+
+    True/False only when the answer is actually known; None on anything
+    ambiguous (binary missing, timeout, unexpected output) — this must
+    never turn an error we don't understand into a false "not signed in."
+
+    codex login status and claude auth status are real, fast,
+    non-interactive commands (confirmed by hand against a real session,
+    not guessed) — unlike cli_version()'s --version, these actually prove
+    session state, not just that the binary runs.
+    """
+    key = f"{provider_name}:{provider_cfg.binary_path or ''}"
+    cached = _signin_cache.get(key)
+    if cached and not force and (time.monotonic() - cached[0]) < _SIGNIN_TTL:
+        return cached[1]
+
+    result = _check_cli_signed_in(provider_name, provider_cfg)
+    _signin_cache[key] = (time.monotonic(), result)
+    return result
+
+
+def clear_signin_cache() -> None:
+    _signin_cache.clear()
+
+
+def _check_cli_signed_in(provider_name: str, provider_cfg) -> bool | None:
+    provider = _provider_instance(provider_name, provider_cfg)
+    try:
+        binary = provider.binary
+    except ProviderError:
+        return None
+
+    args = (
+        [str(binary), "login", "status"]
+        if provider_name == "codex"
+        else [str(binary), "auth", "status"]
+    )
+    try:
+        result = subprocess.run(
+            args, capture_output=True, text=True, timeout=15,
+            cwd=str(Path.home()), creationflags=_CREATE_NO_WINDOW,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+    if provider_name == "claude":
+        # Parse only the one field this app needs — the rest of this JSON
+        # (email, org name, subscription type) must never be logged, cached,
+        # or displayed anywhere.
+        try:
+            payload = json.loads(result.stdout)
+            logged_in = payload.get("loggedIn")
+            return bool(logged_in) if isinstance(logged_in, bool) else None
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    # codex: plain text, no --json option on this subcommand. Confirmed by
+    # hand that it writes to stderr, not stdout — check both.
+    if result.returncode != 0:
+        return None
+    lowered = f"{result.stdout}\n{result.stderr}".lower()
+    if any(phrase in lowered for phrase in _SIGNED_OUT_PHRASES):
+        return False
+    if "logged in" in lowered:
+        return True
+    return None
+
+
 def model_status(cfg: Config, base_dir: Path) -> dict:
     """What each stage will use, plus the CLI version, for display.
 
     Never raises. A missing app shows as unavailable rather than breaking the page.
     """
     registry = model_registry.load(registry_path(base_dir))
+    api_mode = cfg.provider_mode == "api"
     stages = []
+    signed_in = {}
 
     for stage, provider_name, provider_cfg, role in (
         ("Review", "codex", cfg.codex, "Codex / ChatGPT"),
@@ -537,6 +644,8 @@ def model_status(cfg: Config, base_dir: Path) -> dict:
         active = model_registry.active_model(provider_name, provider_cfg.model)
         version = cli_version(provider_name, provider_cfg)
         available = bool(version)
+        if not api_mode:
+            signed_in[provider_name] = cli_signed_in(provider_name, provider_cfg)
 
         stages.append({
             "stage": stage,
@@ -547,7 +656,41 @@ def model_status(cfg: Config, base_dir: Path) -> dict:
             "options": model_registry.as_dicts(registry.for_provider(provider_name)),
             **active,
         })
-    return {"stages": stages}
+
+    return {
+        "stages": stages,
+        "api_mode": api_mode,
+        # Status only — never the key itself. review role -> Anthropic,
+        # revision role -> OpenAI, matching providers/__init__.py's wiring.
+        "key_status": {
+            "anthropic": bool(secrets_store.get_api_key("anthropic")),
+            "openai": bool(secrets_store.get_api_key("openai")),
+        },
+        # Proactive, per CLI — True/False only when actually known (see
+        # cli_signed_in()'s docstring), None (unknown) shows no banner
+        # rather than guessing. Empty in API mode, where it doesn't apply.
+        "signed_in": signed_in,
+    }
+
+
+def last_auth_failure(store: StateStore, limit: int = 5) -> bool:
+    """Reactive signal — True when a recent job actually failed because
+    Codex/Claude needed a fresh sign-in.
+
+    Superseded by cli_signed_in() (a real, proactive login-status check)
+    for the dashboard/Settings banners — kept here for a possible future
+    "why did my last run fail" detail view, not currently called by
+    model_status(). Looks at the most recent FAILED jobs' recorded reason
+    and re-runs the same classify() the provider layer itself uses, so it
+    never invents a new definition of "auth failure."
+    """
+    from .providers.failures import classify
+
+    for row in store.list_jobs(status=ProcessingState.FAILED, limit=limit, newest_first=True):
+        reason = row["reason"] or ""
+        if "auth_required" in reason.lower() or classify(reason) is FailureKind.AUTH_REQUIRED:
+            return True
+    return False
 
 
 def _provider_instance(provider_name: str, provider_cfg):
@@ -556,6 +699,41 @@ def _provider_instance(provider_name: str, provider_cfg):
 
     cls = CodexProvider if provider_name == "codex" else ClaudeCodeProvider
     return cls(provider_cfg)
+
+
+def open_cli_login(provider_name: str, provider_cfg) -> tuple[bool, str]:
+    """Open a real, visible console window running the CLI's own sign-in
+    flow (Settings page's "Sign in" button).
+
+    Codex/Claude logins are interactive — a browser OAuth hop, or terminal
+    prompts — so nothing here can complete a sign-in itself, only launch
+    it where the user can. Mirrors the (bool, str) shape
+    tray_app.ServerController.start()/stop() already use.
+    """
+    provider = _provider_instance(provider_name, provider_cfg)
+    try:
+        binary = provider.binary
+    except ProviderError as exc:
+        return False, str(exc)
+
+    # Codex has a dedicated `login` subcommand. Claude's bare invocation is
+    # what triggers its own sign-in on first use — README's "Log in once"
+    # documents no separate login-only subcommand for it.
+    args = [str(binary), "login"] if provider_name == "codex" else [str(binary)]
+    try:
+        subprocess.Popen(
+            args,
+            cwd=str(Path.home()),
+            creationflags=_CREATE_NEW_CONSOLE,
+        )
+    except OSError as exc:
+        return False, f"Could not open a sign-in window: {exc}"
+
+    label = "Codex" if provider_name == "codex" else "Claude"
+    return True, (
+        f"Opened a sign-in window for {label}. Complete it there, then you "
+        "can close the window."
+    )
 
 
 def update_provider_model(config_path: Path, provider: str, model_id: str) -> bool:
@@ -685,33 +863,101 @@ def schedule_status() -> dict:
 
 
 def set_schedule(enabled: bool, base_dir: Path, at: str = "09:00") -> dict:
-    """Register or remove the daily task by delegating to the existing script."""
+    """Register, reschedule, or remove the daily task directly via
+    schtasks.exe — mirrors what installer.iss's own RegisterScheduledTasks()
+    already does at install time, and works identically whether running
+    from source or from the installed frozen app.
+
+    Previously delegated to scripts/register_task.ps1, a dev-only helper
+    that assumes the source tree (py.exe + run.py) — it doesn't exist
+    anywhere in a frozen install (nothing bundles it, and base_dir there
+    is the user's data folder, not the source tree), so every "Save new
+    time"/"Turn off" click in the installed app failed with "Missing
+    ...\\scripts\\register_task.ps1" before this fix.
+    """
     if sys.platform != "win32":
         return {"ok": False, "message": "Scheduling is Windows only."}
 
-    script = base_dir / "scripts" / "register_task.ps1"
-    if not script.exists():
-        return {"ok": False, "message": f"Missing {script}"}
+    if not enabled:
+        result = _schtasks("/Delete", "/F", "/TN", SCHEDULED_TASK_NAME)
+        combined = (result.stdout + result.stderr).lower()
+        if result.returncode != 0 and "cannot find" not in combined:
+            return {"ok": False, "message": (result.stderr or result.stdout).strip()[-500:]}
+        return {"ok": True, "message": "Turned off."}
 
-    args = [
-        "powershell", "-ExecutionPolicy", "Bypass", "-File", str(script),
-        "-TaskName", SCHEDULED_TASK_NAME,
-    ]
-    if enabled:
-        args += ["-At", at]
+    if getattr(sys, "frozen", False):
+        run_target = Path(sys.executable).with_name("paper-review-run.exe")
+        if not run_target.exists():
+            return {"ok": False, "message": f"Missing {run_target}"}
+        command = f'"{run_target.resolve()}"'
     else:
-        args += ["-Remove"]
+        py = shutil.which("py")
+        if not py:
+            return {"ok": False, "message": "The 'py' launcher was not found on PATH."}
+        run_script = base_dir / "run.py"
+        if not run_script.exists():
+            return {"ok": False, "message": f"Missing {run_script}"}
+        # .resolve() matters: Task Scheduler runs with no working directory
+        # tied to base_dir, so a relative path here would silently fail to
+        # find run.py at trigger time even though it exists right now.
+        command = f'"{Path(py).resolve()}" "{run_script.resolve()}"'
+
+    result = _schtasks(
+        "/Create", "/F", "/SC", "DAILY", "/ST", at,
+        "/TN", SCHEDULED_TASK_NAME, "/TR", command,
+    )
+    if result.returncode != 0:
+        return {"ok": False, "message": (result.stderr or result.stdout).strip()[-500:]}
+    return {"ok": True, "message": f"Scheduled to run daily at {at}."}
+
+
+# --------------------------------------------------------------- folder browse
+
+
+def browse_folders(path: str) -> dict:
+    """List subfolders of `path`, for Settings' "Browse…" buttons.
+
+    A browser page can't open a native OS folder picker (no way to get a
+    real filesystem path back from one) — this is the practical substitute:
+    a small server-side directory listing the page navigates through.
+    Read-only, and deliberately not confined to any single tree the way
+    open_in_explorer() is: this is how an admin sets research_papers_root/
+    scratch_dir in the first place, so it needs to reach anywhere on disk
+    they could already type into the text field by hand — a folder browser
+    grants no capability beyond what free-text entry already has today.
+    """
+    target = Path(path).expanduser() if path else Path.home()
+    try:
+        target = target.resolve()
+    except OSError:
+        target = Path.home().resolve()
+
+    if not target.is_dir():
+        target = target.parent if target.parent.is_dir() else Path.home().resolve()
+
+    def _is_dir(entry: Path) -> bool:
+        try:
+            return entry.is_dir()
+        except OSError:  # a single unreadable/protected entry must not fail the listing
+            return False
 
     try:
-        result = subprocess.run(
-            args, capture_output=True, text=True, timeout=90,
-            creationflags=_CREATE_NO_WINDOW,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
+        entries = list(target.iterdir())
+    except OSError as exc:
         return {"ok": False, "message": str(exc)}
 
-    output = (result.stdout + result.stderr).strip()
-    return {"ok": result.returncode == 0, "message": output[-500:]}
+    folders = [
+        {"name": p.name, "path": str(p)}
+        for p in sorted((e for e in entries if _is_dir(e)), key=lambda e: e.name.lower())
+    ]
+
+    parent = target.parent
+    return {
+        "ok": True,
+        "path": str(target),
+        "parent": str(parent) if parent != target else None,
+        "folders": folders,
+    }
 
 
 # ------------------------------------------------------------------ file access

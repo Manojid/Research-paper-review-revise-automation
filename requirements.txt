@@ -1,11 +1,30 @@
 # Install with:  py -m pip install -r requirements.txt
 #
-# Deliberately minimal. Configuration parsing uses stdlib tomllib and timezone
-# handling uses stdlib zoneinfo, so neither needs a dependency. No API client
-# libraries are required — the models are reached through the Codex and Claude
-# CLIs that ship with their desktop apps.
+# Deliberately minimal. Configuration parsing uses stdlib tomllib. By default
+# the models are reached through the Codex and Claude CLIs that ship with
+# their desktop apps, not an API client library.
 
 python-docx>=1.2.0
+
+# Timezone handling uses stdlib zoneinfo, but Windows (unlike Linux/macOS)
+# ships no IANA tz database of its own — zoneinfo falls back to this package.
+# Declared explicitly: it happened to already be installed (as some other
+# package's transitive dependency) and PyInstaller's own hook silently
+# bundled it, which is how this worked before it was ever listed here.
+tzdata>=2024.1
+
+# Auto-detects this PC's IANA timezone name for the first-run wizard's
+# timezone dropdown (installer/first_run_wizard.py) — nothing in the stdlib
+# maps "Windows timezone" to an IANA zone.
+tzlocal>=5.0
+
+# Stores API keys (provider_mode = "api") in the OS credential store (Windows
+# Credential Manager here), never in config.toml. Required regardless of
+# vendor. The anthropic/openai SDKs themselves are NOT listed here — they're
+# lazily imported by paper_automation/providers/api_provider.py only when API
+# mode is actually used, so an install that never turns it on carries none of
+# that weight. Run `py -m pip install anthropic` / `openai` to use it.
+keyring>=25.0.0
 
 # Only needed if a Telegram/Slack/Teams notification channel is enabled.
 requests>=2.31.0

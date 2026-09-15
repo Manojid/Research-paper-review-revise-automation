@@ -67,6 +67,29 @@ def _tray_exe() -> Path:
     return Path(sys.executable).with_name("PaperReviewAutomation.exe")
 
 
+# Name must match installer.iss's [Setup] AppMutex exactly — that's how Inno
+# Setup detects this process is running and offers to close it before an
+# upgrade install overwrites the exes it locks.
+_APP_MUTEX_NAME = "PaperReviewAutomation_AppMutex"
+# Kept alive for the process lifetime; Windows releases it automatically on
+# exit, so no explicit release/cleanup call is needed.
+_app_mutex_handle = None
+
+
+def _acquire_app_mutex():
+    """Best-effort only — a failure here must never stop the tray from
+    starting. Returns the handle (or None on non-Windows / any failure)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        handle = ctypes.windll.kernel32.CreateMutexW(None, False, _APP_MUTEX_NAME)
+        return handle or None
+    except Exception:
+        return None
+
+
 def _port_is_open(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> bool:
     """True when something is already listening — used both to detect an
     already-running server (don't start a second one) and to confirm a
@@ -138,15 +161,47 @@ class ServerController:
 
 
 def _icon_image(running: bool):
+    """The system tray icon. Color is the actual status signal (done-green
+    while the server is up, idle-gray while stopped) — same document glyph
+    as the app icon (webui/static/tray.ico) so the tray matches the brand,
+    just on a status-colored circle instead of the branded gradient badge.
+
+    Drawn at 4x and downsampled for clean anti-aliased edges, same approach
+    as the app icon itself, but pure PIL (no numpy) since this runs in the
+    live app, not a one-off build script.
+    """
     from PIL import Image, ImageDraw
 
-    size = 64
+    ss = 4
+    size = 64 * ss
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     color = (5, 150, 105, 255) if running else (148, 163, 184, 255)  # done-green / idle-gray
-    draw.ellipse((4, 4, size - 4, size - 4), fill=color)
-    draw.rectangle((22, 16, 42, 48), fill=(255, 255, 255, 255))  # a plain "page" glyph
-    return img
+    draw.ellipse((4 * ss, 4 * ss, size - 4 * ss, size - 4 * ss), fill=color)
+
+    # Folded-corner document glyph, matching the app icon's motif.
+    left, right = size * 0.34, size * 0.66
+    top, bottom = size * 0.24, size * 0.76
+    fold = size * 0.12
+    page_radius = size * 0.03
+    white = (255, 255, 255, 255)
+    draw.rounded_rectangle([left, top, right, bottom], radius=page_radius, fill=white)
+    pad = size * 0.006
+    flap = [(right - fold, top - pad), (right + pad, top - pad), (right + pad, top + fold)]
+    draw.polygon(flap, fill=color)  # flap reads as a fold-shadow in the status color
+
+    line_color = (*color[:3], 130)
+    line_h = size * 0.035
+    line_left = left + size * 0.08
+    full_right = right - size * 0.08
+    for frac, width_frac in ((0.58, 0.55), (0.72, 1.0)):
+        y = top + (bottom - top) * frac
+        line_right = line_left + (full_right - line_left) * width_frac
+        draw.rounded_rectangle(
+            [line_left, y, line_right, y + line_h], radius=line_h / 2, fill=line_color
+        )
+
+    return img.resize((64, 64), Image.LANCZOS)
 
 
 def build_icon(controller: ServerController):
@@ -188,6 +243,8 @@ def build_icon(controller: ServerController):
 
 
 def run_tray() -> None:
+    global _app_mutex_handle
+    _app_mutex_handle = _acquire_app_mutex()
     controller = ServerController()
     controller.start()
     icon = build_icon(controller)

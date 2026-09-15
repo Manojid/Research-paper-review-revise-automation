@@ -133,6 +133,21 @@ def _validated_task_mode(value, path) -> str:
     return mode
 
 
+_PROVIDER_MODES = ("auto", "mock", "real", "api")
+
+
+def _validated_provider_mode(value, path) -> str:
+    """A typo here would silently fall through to the real CLIs (or worse,
+    "mock"), so fail loudly instead."""
+    mode = str(value).strip().lower()
+    if mode not in _PROVIDER_MODES:
+        raise ConfigError(
+            f"provider_mode must be one of {', '.join(_PROVIDER_MODES)} "
+            f"(got '{value}') in {path}"
+        )
+    return mode
+
+
 _STORAGE_BACKENDS = ("local", "gdrive")
 
 
@@ -273,6 +288,7 @@ def load(path: Path | None = None, base_dir: Path | None = None) -> Config:
         ),
         dry_run=bool(raw.get("dry_run", False)),
         test_mode=bool(raw.get("test_mode", False)),
+        provider_mode=_validated_provider_mode(raw.get("provider_mode", "auto"), path),
         task_mode=_validated_task_mode(raw.get("task_mode", "grammar"), path),
         max_retries=int(raw.get("max_retries", 3)),
         retry_base_delay=float(raw.get("retry_base_delay", 5.0)),

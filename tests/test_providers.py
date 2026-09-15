@@ -216,6 +216,18 @@ def test_real_mode_selects_the_two_clis(cfg):
     assert isinstance(revise, ClaudeCodeProvider)
 
 
+def test_api_mode_selects_the_two_api_providers(cfg):
+    from paper_automation.providers.api_provider import (
+        AnthropicApiProvider,
+        OpenAiApiProvider,
+    )
+
+    cfg.provider_mode = "api"
+    review, revise = build_providers(cfg)
+    assert isinstance(review, AnthropicApiProvider)
+    assert isinstance(revise, OpenAiApiProvider)
+
+
 # --- output contract ----------------------------------------------------------
 
 

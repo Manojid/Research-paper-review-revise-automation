@@ -116,6 +116,24 @@ def test_editing_config_preserves_comments(tmp_path):
     assert "[providers.codex]" in text
 
 
+def test_editing_inserts_an_absent_key_before_the_first_table(tmp_path):
+    """provider_mode (added after config.example.toml shipped) is absent from
+    any config.toml built before that — must still be insertable, not silently
+    dropped just because a [table] header exists further down the file."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'research_papers_root = "C:/old"\ntimezone = "UTC"\n'
+        '\n[providers.codex]\nmodel = ""\n',
+        encoding="utf-8",
+    )
+    applied = service.update_config_file(path, {"provider_mode": "api"})
+
+    text = path.read_text(encoding="utf-8")
+    assert applied == ["provider_mode"]
+    assert 'provider_mode = "api"' in text
+    assert text.index("provider_mode") < text.index("[providers.codex]")
+
+
 def test_editing_never_touches_keys_inside_a_table(tmp_path):
     """`model` exists under [providers.codex]; a top-level edit must not reach it."""
     path = tmp_path / "config.toml"
@@ -417,12 +435,86 @@ def test_set_schedule_suppresses_the_console_window(monkeypatch, tmp_path):
         calls.append(kwargs)
         return _FakeRun("", returncode=0)
 
-    script = tmp_path / "scripts" / "register_task.ps1"
-    script.parent.mkdir(parents=True)
-    script.write_text("# stub", encoding="utf-8")
+    (tmp_path / "run.py").write_text("# stub", encoding="utf-8")
     monkeypatch.setattr(service.subprocess, "run", fake_run)
+    monkeypatch.setattr(service.shutil, "which", lambda name: "C:/Python/py.exe", raising=False)
     service.set_schedule(True, tmp_path, "09:00")
     assert calls[0].get("creationflags") == service._CREATE_NO_WINDOW
+
+
+def test_set_schedule_registers_the_task_directly_via_schtasks(monkeypatch, tmp_path):
+    """No more scripts/register_task.ps1 dependency — this used to fail with
+    "Missing ...\\scripts\\register_task.ps1" in every installed (frozen) app,
+    since that dev-only script was never bundled or reachable from base_dir
+    there (base_dir in a frozen build is the user's data folder, not the
+    source tree)."""
+    calls = []
+    monkeypatch.setattr(
+        service, "_schtasks", lambda *args: calls.append(args) or _FakeRun("", returncode=0)
+    )
+    (tmp_path / "run.py").write_text("# stub", encoding="utf-8")
+    monkeypatch.setattr("shutil.which", lambda name: "C:/Python/py.exe")
+
+    result = service.set_schedule(True, tmp_path, "06:30")
+
+    assert result["ok"] is True
+    args = calls[0]
+    assert "/Create" in args
+    assert "06:30" in args
+    tr_index = args.index("/TR")
+    assert "run.py" in args[tr_index + 1]
+    assert "py.exe" in args[tr_index + 1]
+
+
+def test_set_schedule_uses_the_frozen_run_exe_when_frozen(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        service, "_schtasks", lambda *args: calls.append(args) or _FakeRun("", returncode=0)
+    )
+    monkeypatch.setattr(service.sys, "frozen", True, raising=False)
+    fake_exe = tmp_path / "paper-review-run.exe"
+    fake_exe.write_text("stub", encoding="utf-8")
+    monkeypatch.setattr(service.sys, "executable", str(tmp_path / "PaperReviewAutomationService.exe"))
+
+    result = service.set_schedule(True, tmp_path, "09:00")
+
+    assert result["ok"] is True
+    args = calls[0]
+    tr_index = args.index("/TR")
+    assert "paper-review-run.exe" in args[tr_index + 1]
+
+
+def test_set_schedule_reports_a_missing_frozen_exe(monkeypatch, tmp_path):
+    monkeypatch.setattr(service.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(service.sys, "executable", str(tmp_path / "PaperReviewAutomationService.exe"))
+
+    result = service.set_schedule(True, tmp_path, "09:00")
+
+    assert result["ok"] is False
+    assert "paper-review-run.exe" in result["message"]
+
+
+def test_set_schedule_false_deletes_the_task(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        service, "_schtasks", lambda *args: calls.append(args) or _FakeRun("", returncode=0)
+    )
+
+    result = service.set_schedule(False, tmp_path)
+
+    assert result["ok"] is True
+    assert calls[0] == ("/Delete", "/F", "/TN", service.SCHEDULED_TASK_NAME)
+
+
+def test_set_schedule_false_tolerates_an_already_absent_task(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        service, "_schtasks",
+        lambda *args: _FakeRun("ERROR: The system cannot find the file specified.", returncode=1),
+    )
+
+    result = service.set_schedule(False, tmp_path)
+
+    assert result["ok"] is True
 
 
 def test_scheduled_time_is_read_from_the_task_xml(monkeypatch):
@@ -677,3 +769,335 @@ def test_providers_with_different_binaries_cache_separately(cfg, monkeypatch):
     service.cli_version("claude", ProviderConfig(binary_path="a.exe"))
     service.cli_version("claude", ProviderConfig(binary_path="b.exe"))
     assert seen == ["a.exe", "b.exe"]
+
+
+# --- CLI sign-in ---------------------------------------------------------------
+
+
+def test_open_cli_login_spawns_codex_login_in_a_new_console(monkeypatch):
+    from pathlib import Path as _Path
+    from paper_automation.config import ProviderConfig
+
+    calls = []
+    monkeypatch.setattr(
+        service.subprocess, "Popen",
+        lambda args, **kw: calls.append((args, kw)) or None,
+    )
+
+    class FakeBinary:
+        def __str__(self):
+            return "C:/codex/codex.exe"
+
+    monkeypatch.setattr(
+        service, "_provider_instance",
+        lambda name, cfg: type("P", (), {"binary": FakeBinary()})(),
+    )
+
+    ok, message = service.open_cli_login("codex", ProviderConfig())
+
+    assert ok is True
+    args, kwargs = calls[0]
+    assert args == ["C:/codex/codex.exe", "login"]
+    assert kwargs["creationflags"] == service._CREATE_NEW_CONSOLE
+    assert "Codex" in message
+
+
+def test_open_cli_login_spawns_bare_claude_in_a_new_console(monkeypatch):
+    from paper_automation.config import ProviderConfig
+
+    calls = []
+    monkeypatch.setattr(
+        service.subprocess, "Popen",
+        lambda args, **kw: calls.append((args, kw)) or None,
+    )
+
+    class FakeBinary:
+        def __str__(self):
+            return "C:/claude/claude.exe"
+
+    monkeypatch.setattr(
+        service, "_provider_instance",
+        lambda name, cfg: type("P", (), {"binary": FakeBinary()})(),
+    )
+
+    ok, message = service.open_cli_login("claude", ProviderConfig())
+
+    assert ok is True
+    args, kwargs = calls[0]
+    assert args == ["C:/claude/claude.exe"]  # no "login" subcommand for claude
+    assert kwargs["creationflags"] == service._CREATE_NEW_CONSOLE
+    assert "Claude" in message
+
+
+def test_open_cli_login_reports_a_missing_binary_without_raising(monkeypatch):
+    from paper_automation.config import ProviderConfig
+    from paper_automation.models import FailureKind, ProviderError
+
+    class FakeProvider:
+        @property
+        def binary(self):
+            raise ProviderError(FailureKind.BINARY_MISSING, "Could not find codex.")
+
+    monkeypatch.setattr(service, "_provider_instance", lambda name, cfg: FakeProvider())
+
+    ok, message = service.open_cli_login("codex", ProviderConfig())
+
+    assert ok is False
+    assert "Could not find codex" in message
+
+
+# --- reactive CLI auth-failure signal -------------------------------------------
+
+
+def test_last_auth_failure_is_false_with_no_jobs(cfg):
+    from paper_automation.state import StateStore
+
+    with StateStore(cfg.state_db) as store:
+        assert service.last_auth_failure(store) is False
+
+
+def test_last_auth_failure_is_true_after_a_recorded_auth_failure(cfg):
+    from paper_automation.models import ProcessingState
+    from paper_automation.state import StateStore
+
+    with StateStore(cfg.state_db) as store:
+        job_id = store.enqueue_job("August 2026", "Priya", "Acme", Phase.REVIEW)
+        store.start_job(job_id)
+        store.finish_job(
+            job_id, ProcessingState.FAILED,
+            "codex exited 1 (AUTH_REQUIRED): not logged in. Please log in.",
+        )
+        assert service.last_auth_failure(store) is True
+
+
+def test_last_auth_failure_ignores_unrelated_failures(cfg):
+    from paper_automation.models import ProcessingState
+    from paper_automation.state import StateStore
+
+    with StateStore(cfg.state_db) as store:
+        job_id = store.enqueue_job("August 2026", "Priya", "Acme", Phase.REVIEW)
+        store.start_job(job_id)
+        store.finish_job(job_id, ProcessingState.FAILED, "Timed out after 1800s.")
+        assert service.last_auth_failure(store) is False
+
+
+# --- proactive CLI sign-in status ------------------------------------------------
+
+
+class _FakeCompleted:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _fake_provider_with_binary(monkeypatch, path="C:/tool/tool.exe"):
+    monkeypatch.setattr(
+        service, "_provider_instance",
+        lambda name, cfg: type("P", (), {"binary": path})(),
+    )
+
+
+def test_cli_signed_in_true_for_claude_when_json_says_logged_in(monkeypatch, cfg):
+    from paper_automation.config import ProviderConfig
+
+    service.clear_signin_cache()
+    _fake_provider_with_binary(monkeypatch)
+    monkeypatch.setattr(
+        service.subprocess, "run",
+        lambda *a, **kw: _FakeCompleted(stdout='{"loggedIn": true, "email": "user@example.com"}'),
+    )
+
+    assert service.cli_signed_in("claude", ProviderConfig()) is True
+
+
+def test_cli_signed_in_false_for_claude_when_json_says_logged_out(monkeypatch, cfg):
+    from paper_automation.config import ProviderConfig
+
+    service.clear_signin_cache()
+    _fake_provider_with_binary(monkeypatch)
+    monkeypatch.setattr(
+        service.subprocess, "run", lambda *a, **kw: _FakeCompleted(stdout='{"loggedIn": false}')
+    )
+
+    assert service.cli_signed_in("claude", ProviderConfig()) is False
+
+
+def test_cli_signed_in_none_for_claude_on_unparseable_output(monkeypatch, cfg):
+    from paper_automation.config import ProviderConfig
+
+    service.clear_signin_cache()
+    _fake_provider_with_binary(monkeypatch)
+    monkeypatch.setattr(
+        service.subprocess, "run", lambda *a, **kw: _FakeCompleted(stdout="not json")
+    )
+
+    assert service.cli_signed_in("claude", ProviderConfig()) is None
+
+
+def test_cli_signed_in_true_for_codex_reads_stderr(monkeypatch, cfg):
+    """Confirmed by hand: `codex login status` writes to stderr, not stdout."""
+    from paper_automation.config import ProviderConfig
+
+    service.clear_signin_cache()
+    _fake_provider_with_binary(monkeypatch)
+    monkeypatch.setattr(
+        service.subprocess, "run",
+        lambda *a, **kw: _FakeCompleted(stderr="Logged in using ChatGPT\n"),
+    )
+
+    assert service.cli_signed_in("codex", ProviderConfig()) is True
+
+
+def test_cli_signed_in_false_for_codex_on_a_signed_out_phrase(monkeypatch, cfg):
+    from paper_automation.config import ProviderConfig
+
+    service.clear_signin_cache()
+    _fake_provider_with_binary(monkeypatch)
+    monkeypatch.setattr(
+        service.subprocess, "run",
+        lambda *a, **kw: _FakeCompleted(stderr="Not logged in.\n"),
+    )
+
+    assert service.cli_signed_in("codex", ProviderConfig()) is False
+
+
+def test_cli_signed_in_none_for_codex_on_a_nonzero_exit(monkeypatch, cfg):
+    from paper_automation.config import ProviderConfig
+
+    service.clear_signin_cache()
+    _fake_provider_with_binary(monkeypatch)
+    monkeypatch.setattr(
+        service.subprocess, "run", lambda *a, **kw: _FakeCompleted(returncode=1, stderr="boom")
+    )
+
+    assert service.cli_signed_in("codex", ProviderConfig()) is None
+
+
+def test_cli_signed_in_none_when_the_binary_is_missing(monkeypatch, cfg):
+    from paper_automation.config import ProviderConfig
+    from paper_automation.models import FailureKind, ProviderError
+
+    service.clear_signin_cache()
+
+    class MissingBinaryProvider:
+        @property
+        def binary(self):
+            raise ProviderError(FailureKind.BINARY_MISSING, "Could not find codex.")
+
+    monkeypatch.setattr(service, "_provider_instance", lambda name, cfg: MissingBinaryProvider())
+
+    assert service.cli_signed_in("codex", ProviderConfig()) is None
+
+
+def test_cli_signed_in_none_on_timeout(monkeypatch, cfg):
+    import subprocess as sp
+    from paper_automation.config import ProviderConfig
+
+    service.clear_signin_cache()
+    _fake_provider_with_binary(monkeypatch)
+
+    def boom(*a, **kw):
+        raise sp.TimeoutExpired(cmd="x", timeout=15)
+
+    monkeypatch.setattr(service.subprocess, "run", boom)
+
+    assert service.cli_signed_in("codex", ProviderConfig()) is None
+
+
+def test_cli_signed_in_is_cached(monkeypatch, cfg):
+    from paper_automation.config import ProviderConfig
+
+    service.clear_signin_cache()
+    _fake_provider_with_binary(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        service.subprocess, "run",
+        lambda *a, **kw: calls.append(1) or _FakeCompleted(stderr="Logged in using ChatGPT\n"),
+    )
+
+    service.cli_signed_in("codex", ProviderConfig())
+    service.cli_signed_in("codex", ProviderConfig())
+
+    assert len(calls) == 1
+
+
+def test_model_status_includes_signed_in_only_outside_api_mode(monkeypatch, cfg):
+    service.clear_version_cache()
+    service.clear_signin_cache()
+    monkeypatch.setattr(service, "cli_version", lambda *a, **kw: "1.0.0")
+    monkeypatch.setattr(service, "cli_signed_in", lambda *a, **kw: True)
+
+    cfg.provider_mode = "real"
+    status = service.model_status(cfg, cfg.research_papers_root.parent)
+    assert status["signed_in"] == {"codex": True, "claude": True}
+
+    cfg.provider_mode = "api"
+    status = service.model_status(cfg, cfg.research_papers_root.parent)
+    assert status["signed_in"] == {}
+
+
+# --- folder browser --------------------------------------------------------
+
+
+def test_browse_folders_lists_subfolders_sorted(tmp_path):
+    (tmp_path / "Zebra").mkdir()
+    (tmp_path / "Acme").mkdir()
+    (tmp_path / "not_a_folder.txt").write_text("x", encoding="utf-8")
+
+    result = service.browse_folders(str(tmp_path))
+
+    assert result["ok"] is True
+    assert result["path"] == str(tmp_path.resolve())
+    names = [f["name"] for f in result["folders"]]
+    assert names == ["Acme", "Zebra"]  # sorted, files excluded
+
+
+def test_browse_folders_reports_the_parent(tmp_path):
+    child = tmp_path / "sub"
+    child.mkdir()
+    result = service.browse_folders(str(child))
+    assert result["parent"] == str(tmp_path.resolve())
+
+
+def test_browse_folders_defaults_to_home_when_path_is_blank(monkeypatch, tmp_path):
+    monkeypatch.setattr(service.Path, "home", classmethod(lambda cls: tmp_path))
+    result = service.browse_folders("")
+    assert result["ok"] is True
+    assert result["path"] == str(tmp_path.resolve())
+
+
+def test_browse_folders_falls_back_to_the_parent_of_a_file_path(tmp_path):
+    a_file = tmp_path / "manuscript.docx"
+    a_file.write_text("x", encoding="utf-8")
+    result = service.browse_folders(str(a_file))
+    assert result["ok"] is True
+    assert result["path"] == str(tmp_path.resolve())
+
+
+def test_browse_folders_falls_back_to_home_for_a_nonexistent_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(service.Path, "home", classmethod(lambda cls: tmp_path))
+    result = service.browse_folders(str(tmp_path / "does" / "not" / "exist"))
+    assert result["ok"] is True
+    assert result["path"] == str(tmp_path.resolve())
+
+
+def test_browse_folders_survives_an_unreadable_entry(monkeypatch, tmp_path):
+    """A single protected/unreadable subfolder must not break the whole
+    listing — is_dir() can raise PermissionError on some Windows folders."""
+    real_is_dir = Path.is_dir
+
+    def flaky_is_dir(self):
+        if self.name == "Protected":
+            raise PermissionError("Access is denied")
+        return real_is_dir(self)
+
+    (tmp_path / "Protected").mkdir()
+    (tmp_path / "Normal").mkdir()
+    monkeypatch.setattr(service.Path, "is_dir", flaky_is_dir)
+
+    result = service.browse_folders(str(tmp_path))
+
+    assert result["ok"] is True
+    names = [f["name"] for f in result["folders"]]
+    assert names == ["Normal"]

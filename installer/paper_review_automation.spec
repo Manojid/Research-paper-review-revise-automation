@@ -42,6 +42,18 @@ COMMON_HIDDENIMPORTS = [
     "flask", "flask_login", "waitress", "werkzeug.security",
     "pystray", "pystray._win32", "PIL", "PIL.Image", "PIL.ImageDraw",
     "docx", "requests", "tomllib", "sqlite3", "zoneinfo",
+    # keyring's Windows backend (used by secrets_store.py for provider_mode =
+    # "api" keys) is loaded via its own plugin discovery, which PyInstaller's
+    # static analysis does not see — must be listed explicitly or the frozen
+    # build silently falls back to an unusable backend. Same class of issue
+    # as the pywin32 bundling problem already documented for this project.
+    "keyring.backends.Windows", "win32ctypes.pywin32", "win32ctypes.core",
+    # zoneinfo needs tzdata's data files on Windows (see requirements.txt) —
+    # this was already happening via PyInstaller's own hook picking up the
+    # installed package by accident; listed explicitly now that both
+    # first_run_wizard.py's timezone dropdown and tzlocal (below) depend on
+    # it actually being there. tzlocal itself is pure Python, no data files.
+    "tzdata", "tzlocal",
 ]
 
 # This dev machine's site-packages also holds an unrelated data-science/Jupyter
@@ -90,6 +102,9 @@ MERGE(
 )
 
 
+APP_ICON = str(PROJECT_ROOT / "webui" / "static" / "tray.ico")
+
+
 def build_exe(a, name, console):
     pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
     return EXE(
@@ -101,6 +116,7 @@ def build_exe(a, name, console):
         strip=False,
         upx=False,
         console=console,
+        icon=APP_ICON,
     ), pyz
 
 

@@ -38,6 +38,7 @@ server, so the bar is "meaningfully slower than instant," not "unbreakable."
 import logging
 import os
 import secrets
+import sys
 import threading
 import time
 import webbrowser
@@ -55,10 +56,28 @@ from flask_login import (
 import paper_automation
 from paper_automation import auth
 from paper_automation import config as config_module
-from paper_automation import service
+from paper_automation import secrets_store, service
 from paper_automation.storage import build_storage
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+def _default_base_dir() -> Path:
+    """Same frozen-awareness gate as paper_automation/config.py's
+    _default_base_dir() (source-of-truth docstring there) — must be kept
+    in sync with it: a frozen build has no .py files on disk to resolve
+    `__file__` against (it points into PyInstaller's _internal extraction
+    folder, not {app} itself), so config.toml/state/models.json all live
+    under the user's home folder instead. This was missing here entirely
+    until a real install surfaced it (Settings save, model registry,
+    schedule toggle all wrote to a nonexistent {app}\\_internal\\... path)
+    — current_config() was unaffected since it calls config_module.load()
+    with no args, which already had this gate; every OTHER use of
+    BASE_DIR in this file did not.
+    """
+    if getattr(sys, "frozen", False):
+        return Path.home() / "PaperReviewAutomation"
+    return Path(__file__).resolve().parent.parent
+
+
+BASE_DIR = _default_base_dir()
 
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
@@ -540,6 +559,16 @@ def settings():
                 if service.update_provider_model(path, provider, chosen):
                     applied.append(f"{provider} model")
 
+            # API keys never touch config.toml — stored in Windows Credential
+            # Manager via secrets_store, and only overwritten when a new value
+            # was actually typed (a blank submission leaves the stored key
+            # alone, so the page never needs to re-display it).
+            for vendor in ("anthropic", "openai"):
+                value = (request.form.get(f"{vendor}_api_key") or "").strip()
+                if value:
+                    secrets_store.set_api_key(vendor, value)
+                    applied.append(f"{vendor} API key")
+
             config_module.load()  # fail loudly here rather than on the next run
             message = (
                 "Saved: " + ", ".join(applied) if applied else "No changes to save."
@@ -562,11 +591,23 @@ def settings():
         schedule=service.schedule_status(),
         models=service.model_status(cfg, BASE_DIR),
         registry_path=str(service.registry_path(BASE_DIR)),
+        timezones=service.timezone_choices(),
         active="settings",
     )
 
 
 # ------------------------------------------------------------------------- api
+
+
+@app.get("/api/browse-folders")
+@controller_only
+def api_browse_folders():
+    """Powers every "Browse…" button in Settings — a server-side folder
+    listing, since a browser page has no way to open a native OS folder
+    picker and get a real filesystem path back (see service.browse_folders()
+    for why this isn't confined to any single tree)."""
+    result = service.browse_folders(request.args.get("path", ""))
+    return jsonify(result), (200 if result["ok"] else 400)
 
 
 @app.post("/api/run")
@@ -589,6 +630,24 @@ def api_run():
 
     result = runs.start(cfg, storage, options)
     return jsonify(result), (200 if result["ok"] else 409)
+
+
+@app.post("/api/cli-login/<provider>")
+@controller_only
+def api_cli_login(provider):
+    """Opens a real, visible console window running the CLI's own sign-in
+    flow (Settings page's "Sign in" button) — see service.open_cli_login()
+    for why this is the one deliberate exception to every other subprocess
+    call in this app hiding its console."""
+    if provider not in ("codex", "claude"):
+        return jsonify({"ok": False, "message": "Unknown provider."}), 400
+    try:
+        cfg = current_config()
+    except config_module.ConfigError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+
+    ok, message = service.open_cli_login(provider, getattr(cfg, provider))
+    return jsonify({"ok": ok, "message": message}), (200 if ok else 400)
 
 
 @app.get("/api/status")
