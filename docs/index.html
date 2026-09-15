@@ -140,6 +140,7 @@
     gap: 0;
     align-items: stretch;
   }
+  .pipeline .stage { min-width: 0; }
   @media (max-width: 820px) {
     .pipeline { grid-template-columns: 1fr; }
     .pipeline .arrow { transform: rotate(90deg); margin: 4px 0; }
@@ -199,7 +200,8 @@
   .callout p { margin: 0; color: var(--text-dim); font-size: 0.9rem; }
 
   /* Roles table */
-  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .table-scroll { overflow-x: auto; border-radius: var(--radius); }
+  table { width: 100%; min-width: 480px; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
   th, td { text-align: left; padding: 12px 18px; font-size: 0.88rem; border-bottom: 1px solid var(--border); }
   th { color: var(--text-dim); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
   tr:last-child td { border-bottom: none; }
@@ -219,6 +221,7 @@
   pre code { background: none; padding: 0; }
 
   .run-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .run-grid > * { min-width: 0; }
   @media (max-width: 720px) {
     .run-grid { grid-template-columns: 1fr; }
     .nav-links { display: none; }
@@ -439,13 +442,15 @@
   <div class="wrap">
     <h2>Roles</h2>
     <p class="section-intro">Every restriction is enforced on the server — hiding a button is cosmetic, calling the API directly as a User is refused with a 403.</p>
-    <table>
-      <tr><th></th><th>Admin</th><th>User</th></tr>
-      <tr><td>See papers</td><td class="yes">Every employee</td><td class="no">Own employee only</td></tr>
-      <tr><td>Start a run, change settings/schedule/prompts</td><td class="yes">Yes</td><td class="no">No</td></tr>
-      <tr><td>Approve/reject sign-up requests</td><td class="yes">Yes</td><td class="no">No</td></tr>
-      <tr><td>Open a file on the server</td><td class="yes">Any paper</td><td class="no">Own only</td></tr>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <tr><th></th><th>Admin</th><th>User</th></tr>
+        <tr><td>See papers</td><td class="yes">Every employee</td><td class="no">Own employee only</td></tr>
+        <tr><td>Start a run, change settings/schedule/prompts</td><td class="yes">Yes</td><td class="no">No</td></tr>
+        <tr><td>Approve/reject sign-up requests</td><td class="yes">Yes</td><td class="no">No</td></tr>
+        <tr><td>Open a file on the server</td><td class="yes">Any paper</td><td class="no">Own only</td></tr>
+      </table>
+    </div>
   </div>
 </section>
 
